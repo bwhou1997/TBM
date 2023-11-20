@@ -1,19 +1,24 @@
 import numpy as np
 from progress import ProgressBar
 import matplotlib.pyplot as plt
+from crystal import Hamiltonian
 
-class crystal():
-    def __init__(self):
-        # Bi2Se3
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import norm, uniform
+
+class crystal_MCMC():
+    def __init__(self, delta_so):
+        # Bi2Te3
         # 1. Geometry
         # (1) lattice
         self.n_orbital = 4
         self.n_atom = 5
         self.n_dim = 2 * self.n_atom * self.n_orbital
-        self.a = 4.114  # lattice parameter (in A)
-        self.h1 = np.sqrt(3.030 ** 2 - self.a **2 / 3)
-        self.h2 = np.sqrt(2.926 ** 2 - self.a **2 / 3)
-        self.h3 = np.sqrt(3.354 ** 2 - self.a **2 / 3)
+        self.a = 4.369  # lattice parameter (in A)
+        self.h1 = np.sqrt(3.218 ** 2 - self.a **2 / 3)
+        self.h2 = np.sqrt(3.108 ** 2 - self.a **2 / 3)
+        self.h3 = np.sqrt(3.562 ** 2 - self.a **2 / 3)
         self.a1 = np.array([self.a / 2, self.a * np.sqrt(3) / 6, 2 * (self.h1 + self.h2) + self.h3])
         self.a2 = np.array([-self.a / 2, self.a * np.sqrt(3) / 6, 2 * (self.h1 + self.h2) + self.h3])
         self.a3 = np.array([0, -self.a * np.sqrt(3) / 3, 2 * (self.h1 + self.h2) + self.h3])
@@ -21,7 +26,8 @@ class crystal():
         self.b1 = 2 * np.pi * np.cross(self.a2, self.a3) / self.v
         self.b2 = 2 * np.pi * np.cross(self.a3, self.a1) / self.v
         self.b3 = 2 * np.pi * np.cross(self.a1, self.a2) / self.v
-        self.n_layer = 2
+        self.n_layer = 1
+
 
         # (2) neighbor
         self.neighbour11 = self.a*np.array([[1, 0, 0],[1/2, np.sqrt(3)/2, 0],[-1/2, np.sqrt(3)/2, 0],[-1, 0, 0],[-1/2, -np.sqrt(3)/2, 0],[1/2, -np.sqrt(3)/2, 0]])
@@ -33,15 +39,14 @@ class crystal():
         self.neighbour12 = np.array([[ 0,np.sqrt(3)*self.a/3, -2*self.h1],[ -self.a/2, -np.sqrt(3)*self.a/6, -2*self.h1],[ self.a/2, -np.sqrt(3)*self.a/6 ,-2*self.h1 ]])
 
         # 2. K-path
-        self.Z = np.array([0.5,0.5,0.5])
-        self.F = np.array([0.5,0.5,0.0])
-        self.G = np.array([0.0,0.0,0.0])
-        self.L = np.array([0.5,0.0,0.0])
 
-        self.kpath = np.array([self.G,self.Z,self.F,self.G,self.L]) @ np.array([self.b1, self.b2, self.b3])
-        # self.kpath = np.array([ self.F, self.G, self.L]) @ np.array([self.b1, self.b2, self.b3])
+        self.G = np.array([0.0,0.0,0.0])
+        self.L_ = np.array([0.25, 0.0, 0.0])
+
+        # self.kpath = np.array([self.G,self.Z,self.F,self.G,self.L]) @ np.array([self.b1, self.b2, self.b3])
+        self.kpath = np.array([self.G, self.L_]) @ np.array([self.b1, self.b2, self.b3])
         self.n_kpath = self.kpath.shape[0]
-        self.dk = 300 # this is number of points between two high symmetry points
+        self.dk = 1 # this is number of points between two high symmetry points
         self.k = np.zeros(((self.n_kpath - 1)* self.dk, 3))
         self.x = np.zeros((self.n_kpath-1) * self.dk)
         self.k_label = np.zeros(self.n_kpath)
@@ -56,7 +61,7 @@ class crystal():
 
         # 3. Tight Binding model Parameter from DFT
         parameter_path = './parameter/'
-        self.delta_so = np.loadtxt(parameter_path + 'delta_so.dat')
+        self.delta_so = delta_so
         self.delta = self.delta_so / 3
         self.es = np.loadtxt(parameter_path +'es.dat')
         self.ep = np.loadtxt(parameter_path +'ep.dat')
@@ -65,16 +70,21 @@ class crystal():
         self.Vps_sigma = np.loadtxt(parameter_path + 'Vps_sigma.dat')
         self.Vpp_sigma = np.loadtxt(parameter_path + 'Vpp_sigma.dat')
         self.Vpp_pi = np.loadtxt(parameter_path + 'Vpp_pi.dat')
-        print('all parameters have been loaded')
+        # print('all parameters have been loaded')
 
-class Hamiltonian(crystal):
-    def __init__(self):
-        super(Hamiltonian,self).__init__() # get crystal parameter from crystal()
+class Hamiltonian_MCMC(crystal_MCMC):
+    def __init__(self,delta_so):
+        super(Hamiltonian_MCMC,self).__init__(delta_so) # get crystal parameter from crystal()
 
         # Total Hamiltonian Frame (to be diagonalized) n_layer(*n_dim) * n_layer(*n_dim)
+        # Open Boundary Condition
         self.H_QL10 = np.eye(self.n_layer, k=-1)
         self.H_QL01 = np.eye(self.n_layer, k=1)
         self.H_QL00 = np.eye(self.n_layer)
+
+        # Periodic Boundary Condition
+        self.H_QL10_open = np.eye(self.n_layer, k=self.n_layer-1)
+        self.H_QL01_open = np.eye(self.n_layer, k=1-self.n_layer)
 
         # Bulk-Surface interaction
         # self.intraction = 0.
@@ -111,21 +121,23 @@ class Hamiltonian(crystal):
 
         # Slab
         self.eigenvalue_slab = np.zeros((self.n_kpoints, self.n_layer * self.n_dim),dtype=complex)
+        # self.eigenvalue_slab_periodic = np.zeros((self.n_kpoints, self.n_layer * self.n_dim),dtype=complex)
         self.H_slab = np.zeros((self.n_layer*self.n_dim, self.n_layer*self.n_dim, self.n_kpoints),dtype=complex)
+        # self.H_slab_periodic = np.zeros((self.n_layer * self.n_dim, self.n_layer * self.n_dim, self.n_kpoints), dtype=complex)
 
         # self.H00 = np.zeros(self.n_dim,self.n_dim,self.n_kpoints)
         # self.H01 = np.zeros(self.n_dim, self.n_dim, self.n_kpoints)
         # self.H10 = np.zeros(self.n_dim, self.n_dim, self.n_kpoints)
         zeroCell = np.zeros((self.n_orbital,self.n_orbital))
 
-        progress = ProgressBar( self.n_kpoints ,fmt=ProgressBar.FULL)
+        # progress = ProgressBar( self.n_kpoints ,fmt=ProgressBar.FULL)
         for ik in range(self.n_kpoints):
             # if ik % (self.n_kpoints // 10) == 0:
             #     print('[k-point diagonalized:]',ik / self.n_kpoints * 100,'%')
 
             # progress report
-            progress.current += 1
-            progress()
+            # progress.current += 1
+            # progress()
             #
 
             kpoint = self.k[ik,:]
@@ -167,13 +179,20 @@ class Hamiltonian(crystal):
             H01 = np.kron(np.eye(2,2),  H_inter)
             H10 = H01.conjugate().T
 
-            self.H_slab[:,:,ik] =  np.kron(self.H_QL10,H10) + np.kron(self.H_QL01,H01) + np.kron(self.H_QL00,H00)\
+            self.H_slab[:, :, ik] = np.kron(self.H_QL10, H10) + np.kron(self.H_QL01, H01) + np.kron(self.H_QL00, H00)
+
+
+
+            # self.H_slab_periodic[:,:,ik] =  np.kron(self.H_QL10,H10) + np.kron(self.H_QL01,H01) + np.kron(self.H_QL00,H00)\
+            #                        + np.kron(self.H_QL01_open,H01) + np.kron(self.H_QL10_open,H10)
+                                   # bulk-surface interaction
                                    # + np.kron(self.H_QL_perturb_lower,np.ones_like(H00)* self.intraction) \
                                    # + np.kron(self.H_QL_perturb_upper, np.ones_like(H00) * self.intraction)
 
             # Diagonalize
             self.eigenvalue_bulk[ik,:],_ = np.linalg.eig(self.H_bulk[:,:, ik])
             self.eigenvalue_slab[ik,:],_ = np.linalg.eig(self.H_slab[:,:, ik])
+            # self.eigenvalue_slab_periodic[ik,:],_ = np.linalg.eig(self.H_slab_periodic[:,:,ik])
 
     def plot_bulk(self):
         fig = plt.figure()
@@ -186,10 +205,19 @@ class Hamiltonian(crystal):
         fig = plt.figure()
         xx = (np.ones_like(np.abs(self.eigenvalue_slab)) * self.x[:,np.newaxis])
         # plt.scatter(xx, np.real(self.eigenvalue_slab), s=1, color='blue')
-        plt.plot(xx, np.sort(np.real(self.eigenvalue_slab), axis=1),color='blue')
+        plt.plot(xx, np.sort(np.real(self.eigenvalue_slab), axis=1),color='red')
         plt.ylim((-1.5,2))
         plt.xlim((xx.min(),xx.max()))
         plt.show()
+
+    # def plot_slab_periodic(self):
+    #     fig = plt.figure()
+    #     xx = (np.ones_like(np.abs(self.eigenvalue_slab_periodic)) * self.x[:,np.newaxis])
+    #     # plt.scatter(xx, np.real(self.eigenvalue_slab), s=1, color='blue')
+    #     plt.plot(xx, np.sort(np.real(self.eigenvalue_slab_periodic), axis=1),color='blue')
+    #     plt.ylim((-1.5,2))
+    #     plt.xlim((xx.min(),xx.max()))
+    #     plt.show()
 
     def build_ham(self,i,j,neighbour,kpoint):
         """
@@ -231,5 +259,28 @@ class Hamiltonian(crystal):
         return H_orb_sub
 
 if __name__ == "__main__":
-    h = Hamiltonian()
 
+    h_True = Hamiltonian()
+
+
+    def posterior(delta_so):
+        h_MCMC = Hamiltonian_MCMC(delta_so=delta_so)
+        return 1/(np.linalg.norm(np.abs(h_MCMC.eigenvalue_bulk) - np.abs(h_True.eigenvalue_bulk)))
+
+    nit = 10000
+    results = np.zeros((nit, 5))
+    current = np.array([2,2,2,2,2])  # initial value
+    results[0, :] = current
+
+    progress = ProgressBar(nit-1, fmt=ProgressBar.FULL)
+    for i in range(1, nit):
+        # progress report
+        progress.current += 1
+        progress()
+
+        cand = current + np.random.uniform(low=-0.1, high=0.1, size=5)
+        ratio = posterior(cand) / posterior(current)
+        u = np.random.uniform(0, 1)
+        if u < ratio:
+            current = cand
+        results[i, :] = current

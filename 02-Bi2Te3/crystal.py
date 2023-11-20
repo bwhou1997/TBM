@@ -21,7 +21,8 @@ class crystal():
         self.b1 = 2 * np.pi * np.cross(self.a2, self.a3) / self.v
         self.b2 = 2 * np.pi * np.cross(self.a3, self.a1) / self.v
         self.b3 = 2 * np.pi * np.cross(self.a1, self.a2) / self.v
-        self.n_layer = 1
+        self.n_layer = 9
+
 
         # (2) neighbor
         self.neighbour11 = self.a*np.array([[1, 0, 0],[1/2, np.sqrt(3)/2, 0],[-1/2, np.sqrt(3)/2, 0],[-1, 0, 0],[-1/2, -np.sqrt(3)/2, 0],[1/2, -np.sqrt(3)/2, 0]])
@@ -37,11 +38,15 @@ class crystal():
         self.F = np.array([0.5,0.5,0.0])
         self.G = np.array([0.0,0.0,0.0])
         self.L = np.array([0.5,0.0,0.0])
+        self.K = np.array([0.6666667, 0.33333333, 0.0])
 
-        self.kpath = np.array([self.G,self.Z,self.F,self.G,self.L]) @ np.array([self.b1, self.b2, self.b3])
-        # self.kpath = np.array([ self.F, self.G, self.L]) @ np.array([self.b1, self.b2, self.b3])
+        self.K_ = np.array([0.4, 0.2, 0.0])
+        self.L_ = np.array([0.25, 0.0, 0.0])
+
+        # self.kpath = np.array([self.G,self.Z,self.F,self.G,self.L]) @ np.array([self.b1, self.b2, self.b3])
+        self.kpath = np.array([ self.K_, self.G, self.L_]) @ np.array([self.b1, self.b2, self.b3])
         self.n_kpath = self.kpath.shape[0]
-        self.dk = 300 # this is number of points between two high symmetry points
+        self.dk = 100 # this is number of points between two high symmetry points
         self.k = np.zeros(((self.n_kpath - 1)* self.dk, 3))
         self.x = np.zeros((self.n_kpath-1) * self.dk)
         self.k_label = np.zeros(self.n_kpath)
@@ -72,9 +77,14 @@ class Hamiltonian(crystal):
         super(Hamiltonian,self).__init__() # get crystal parameter from crystal()
 
         # Total Hamiltonian Frame (to be diagonalized) n_layer(*n_dim) * n_layer(*n_dim)
+        # Open Boundary Condition
         self.H_QL10 = np.eye(self.n_layer, k=-1)
         self.H_QL01 = np.eye(self.n_layer, k=1)
         self.H_QL00 = np.eye(self.n_layer)
+
+        # Periodic Boundary Condition
+        self.H_QL10_open = np.eye(self.n_layer, k=self.n_layer-1)
+        self.H_QL01_open = np.eye(self.n_layer, k=1-self.n_layer)
 
         # Bulk-Surface interaction
         # self.intraction = 0.
@@ -111,7 +121,9 @@ class Hamiltonian(crystal):
 
         # Slab
         self.eigenvalue_slab = np.zeros((self.n_kpoints, self.n_layer * self.n_dim),dtype=complex)
+        # self.eigenvalue_slab_periodic = np.zeros((self.n_kpoints, self.n_layer * self.n_dim),dtype=complex)
         self.H_slab = np.zeros((self.n_layer*self.n_dim, self.n_layer*self.n_dim, self.n_kpoints),dtype=complex)
+        # self.H_slab_periodic = np.zeros((self.n_layer * self.n_dim, self.n_layer * self.n_dim, self.n_kpoints), dtype=complex)
 
         # self.H00 = np.zeros(self.n_dim,self.n_dim,self.n_kpoints)
         # self.H01 = np.zeros(self.n_dim, self.n_dim, self.n_kpoints)
@@ -167,13 +179,20 @@ class Hamiltonian(crystal):
             H01 = np.kron(np.eye(2,2),  H_inter)
             H10 = H01.conjugate().T
 
-            self.H_slab[:,:,ik] =  np.kron(self.H_QL10,H10) + np.kron(self.H_QL01,H01) + np.kron(self.H_QL00,H00)\
+            self.H_slab[:, :, ik] = np.kron(self.H_QL10, H10) + np.kron(self.H_QL01, H01) + np.kron(self.H_QL00, H00)
+
+
+
+            # self.H_slab_periodic[:,:,ik] =  np.kron(self.H_QL10,H10) + np.kron(self.H_QL01,H01) + np.kron(self.H_QL00,H00)\
+            #                        + np.kron(self.H_QL01_open,H01) + np.kron(self.H_QL10_open,H10)
+                                   # bulk-surface interaction
                                    # + np.kron(self.H_QL_perturb_lower,np.ones_like(H00)* self.intraction) \
                                    # + np.kron(self.H_QL_perturb_upper, np.ones_like(H00) * self.intraction)
 
             # Diagonalize
             self.eigenvalue_bulk[ik,:],_ = np.linalg.eig(self.H_bulk[:,:, ik])
             self.eigenvalue_slab[ik,:],_ = np.linalg.eig(self.H_slab[:,:, ik])
+            # self.eigenvalue_slab_periodic[ik,:],_ = np.linalg.eig(self.H_slab_periodic[:,:,ik])
 
     def plot_bulk(self):
         fig = plt.figure()
@@ -186,10 +205,19 @@ class Hamiltonian(crystal):
         fig = plt.figure()
         xx = (np.ones_like(np.abs(self.eigenvalue_slab)) * self.x[:,np.newaxis])
         # plt.scatter(xx, np.real(self.eigenvalue_slab), s=1, color='blue')
-        plt.plot(xx, np.sort(np.real(self.eigenvalue_slab), axis=1),color='blue')
+        plt.plot(xx, np.sort(np.real(self.eigenvalue_slab), axis=1),color='red')
         plt.ylim((-1.5,2))
         plt.xlim((xx.min(),xx.max()))
         plt.show()
+
+    # def plot_slab_periodic(self):
+    #     fig = plt.figure()
+    #     xx = (np.ones_like(np.abs(self.eigenvalue_slab_periodic)) * self.x[:,np.newaxis])
+    #     # plt.scatter(xx, np.real(self.eigenvalue_slab), s=1, color='blue')
+    #     plt.plot(xx, np.sort(np.real(self.eigenvalue_slab_periodic), axis=1),color='blue')
+    #     plt.ylim((-1.5,2))
+    #     plt.xlim((xx.min(),xx.max()))
+    #     plt.show()
 
     def build_ham(self,i,j,neighbour,kpoint):
         """
